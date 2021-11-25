@@ -36,7 +36,7 @@ func main() {
 	// response printer
 	go func() {
 		for {
-			response := <- responsePull
+			response := <-responsePull
 			fmt.Println(response)
 		}
 	}()
@@ -64,7 +64,7 @@ func initConnection(network string, host string, port string, messagePull chan s
 	for {
 		message := <-messagePull
 		// Send to socket
-		_, err := fmt.Fprintf(conn, message+"\n")
+		_, err := fmt.Fprintf(conn, message)
 		if err == nil {
 			// Listen response
 			tmp := make([]byte, 4096)
@@ -105,7 +105,9 @@ readLoop:
 	for {
 		event := <-keysEvents
 		if event.Err != nil {
-			panic(event.Err)
+			fmt.Println(event.Err)
+			continue // Just drop event if key don't recognized
+			//panic(event.Err)
 		}
 
 		switch event.Key {
@@ -115,16 +117,16 @@ readLoop:
 				historyIterator++
 				buffer = history[len(history)-historyIterator]
 			}
-			fmt.Print("\033[H\033[2J")
-			fmt.Println(buffer)
+			clearConsole()
+			fmt.Print(buffer)
 			break
 		case keyboard.KeyArrowDown:
 			// History popup
 			if historyIterator > 1 {
 				historyIterator--
 				buffer = history[len(history)-historyIterator]
-				fmt.Print("\033[H\033[2J")
-				fmt.Println(buffer)
+				clearConsole()
+				fmt.Print(buffer)
 			} else {
 				clearConsole()
 				buffer = ""
@@ -146,9 +148,14 @@ readLoop:
 			break
 		case keyboard.KeyEnter:
 			// Send message
-			messagePull <- buffer
-			history = append(history, buffer)
-			fmt.Printf("\n")
+			if len(buffer) > 0 {
+				buffer += "\n"
+				history = append(history, buffer)
+				messagePull <- buffer
+			} else {
+				messagePull <- "\n"
+			}
+			fmt.Print("\n")
 			buffer = ""
 			historyIterator = 0
 			break
