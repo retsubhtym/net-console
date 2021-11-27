@@ -149,8 +149,10 @@ readLoop:
 		case keyboard.KeyEnter:
 			// Send message
 			if len(buffer) > 0 {
+				if len(history) == 0 || history[len(history)-1] != buffer {
+					history = append(history, buffer)
+				}
 				buffer += "\n"
-				history = append(history, buffer)
 				messagePull <- buffer
 			} else {
 				messagePull <- "\n"
