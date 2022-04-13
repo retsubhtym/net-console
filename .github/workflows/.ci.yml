@@ -2,24 +2,28 @@ name: Go
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches:
+      - main
+    tags:
+      - v*
 
 jobs:
-
   build:
-    runs-on: ubuntu-latest
+    runs-on: [ubuntu-20.04]
+    strategy:
+      matrix:
+        os: [linux, windows, darwin]
     steps:
     - uses: actions/checkout@v2
-
     - name: Set up Go
       uses: actions/setup-go@v2
       with:
         go-version: 1.17
 
     - name: Build
-      run: go build -v ./...
+      run: GOOS=${{matrix.os}} GOARCH=amd64 go build -o ./build/${{matrix.os}}/net-console -v ./...
 
-#     - name: Test
-#       run: go test -v ./...
+    - uses: actions/upload-artifact@v3
+      with:
+        name: net-console-${{matrix.os}}-${{github.ref_name}}
+        path: build/${{matrix.os}}/
