@@ -3,9 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/eiannone/keyboard"
 	"net"
 	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
@@ -25,24 +26,17 @@ func main() {
 	}
 
 	// Channel to connect user input and goroutine
-	messagePull := make(chan string)
-	responsePull := make(chan string)
+	messagePool := make(chan string)
+	responsePool := make(chan string)
 
-	clearConsole()
 	fmt.Println("Trying " + host)
+	go initConnection("tcp", host, port, messagePool, responsePool)
 
-	go initConnection("tcp", host, port, messagePull, responsePull)
-
-	// response printer
-	go func() {
-		for {
-			response := <-responsePull
-			fmt.Println(response)
-		}
-	}()
-
-	startInputProcessing(messagePull)
-
+	p := tea.NewProgram(initialModel(messagePool, responsePool))
+	if err := p.Start(); err != nil {
+		fmt.Printf("Error occured: %v", err)
+		os.Exit(1)
+	}
 }
 
 // initConnection connects to remove host via protocol provided in network string
@@ -64,7 +58,7 @@ func initConnection(network string, host string, port string, messagePull chan s
 	for {
 		message := <-messagePull
 		// Send to socket
-		_, err := fmt.Fprintf(conn, message)
+		_, err := fmt.Fprint(conn, message)
 		if err == nil {
 			// Listen response
 			tmp := make([]byte, 4096)
@@ -74,7 +68,7 @@ func initConnection(network string, host string, port string, messagePull chan s
 				os.Exit(1)
 			} else {
 				responsePull <- string(tmp[0:n])
-				//fmt.Println(string(tmp[0:n]))
+				fmt.Println(string(tmp[0:n]))
 			}
 		} else {
 			fmt.Println("Error, Connection closed")
@@ -83,99 +77,89 @@ func initConnection(network string, host string, port string, messagePull chan s
 	}
 }
 
-// startInputProcessing runs keyboard listener, which collects user input in local buffer
-// message goes into messagePull when user press Enter
-// arrows up and down scrolls between written messages
-func startInputProcessing(messagePull chan string) {
+type model struct {
+	index        int
+	history      []string
+	buffer       string
+	response     string
+	messagePool  chan string
+	responsePool chan string
+}
 
-	keysEvents, err := keyboard.GetKeys(10)
-	if err != nil {
-		panic(err)
-	}
-
-	defer func() {
-		_ = keyboard.Close()
-	}()
-
-	var history []string
-	var buffer string
-	historyIterator := 0
-
-readLoop:
-	for {
-		event := <-keysEvents
-		if event.Err != nil {
-			fmt.Println(event.Err)
-			continue // Just drop event if key don't recognized
-			//panic(event.Err)
-		}
-
-		switch event.Key {
-		case keyboard.KeyArrowUp:
-			// History popup
-			if historyIterator < len(history) {
-				historyIterator++
-				buffer = history[len(history)-historyIterator]
-			}
-			clearConsole()
-			fmt.Print(buffer)
-			break
-		case keyboard.KeyArrowDown:
-			// History popup
-			if historyIterator > 1 {
-				historyIterator--
-				buffer = history[len(history)-historyIterator]
-				clearConsole()
-				fmt.Print(buffer)
-			} else {
-				clearConsole()
-				buffer = ""
-			}
-			break
-		case keyboard.KeyEsc:
-			fallthrough
-		case keyboard.KeyCtrlC:
-			// Exit
-			break readLoop
-		case keyboard.KeyBackspace:
-		case keyboard.KeyBackspace2:
-			// remove last character
-			if len(buffer) > 0 {
-				buffer = buffer[:(len(buffer) - 1)]
-				clearConsole()
-				fmt.Print(buffer)
-			}
-			break
-		case keyboard.KeyEnter:
-			// Send message
-			if len(buffer) > 0 {
-				if len(history) == 0 || history[len(history)-1] != buffer {
-					history = append(history, buffer)
-				}
-				buffer += "\n"
-				messagePull <- buffer
-			} else {
-				messagePull <- "\n"
-			}
-			fmt.Print("\n")
-			buffer = ""
-			historyIterator = 0
-			break
-		case keyboard.KeySpace:
-			// HACK github.com/eiannone/keyboard returns only Key value for KeySpace, Rune is empty
-			clearConsole()
-			buffer += " "
-			fmt.Print(buffer)
-			break
-		default:
-			clearConsole()
-			buffer += string(event.Rune)
-			fmt.Print(buffer)
-			break
-		}
+func initialModel(messagePool chan string, responsePool chan string) model {
+	return model{
+		index:        -1,
+		buffer:       "",
+		response:     "",
+		messagePool:  messagePool,
+		responsePool: responsePool,
 	}
 }
 
-func clearConsole() {
-	fmt.Print("\033[H\033[2J")
+func (m model) Init() tea.Cmd {
+	go func() {
+		for {
+			m.response = <-m.responsePool
+		}
+	}()
+	return nil
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+
+	case tea.KeyMsg:
+
+		switch msg.String() {
+		case "ctrl+q":
+			m.buffer = "Wake up Neo...\nThe Matrix has you...\n" +
+				"Follow the white rabbit.\n\n\nKnock, knock, Neo.\n"
+			fallthrough
+		case "ctrl+c", "esc":
+			return m, tea.Quit
+		case "up", "k":
+			if m.index < len(m.history) {
+				m.index++
+			}
+			if m.index < len(m.history) {
+				m.buffer = m.history[len(m.history)-1-m.index]
+			} else {
+				m.buffer = ""
+			}
+		case "down", "j":
+			if m.index > -1 {
+				m.index--
+			}
+			if m.index >= 0 && len(m.history) > 0 {
+				m.buffer = m.history[len(m.history)-1-m.index]
+			} else {
+				m.buffer = ""
+			}
+		case "backspace":
+			m.buffer = m.buffer[:(len(m.buffer) - 1)]
+		case "enter":
+			m.messagePool <- m.buffer + "\n"
+			if m.buffer != "" &&
+				(len(m.history) == 0 || m.history[len(m.history)-1] != m.buffer) {
+				m.history = append(m.history, m.buffer)
+			}
+			m.buffer = ""
+			m.index = -1
+		default:
+			if len(msg.String()) == 1 {
+				m.buffer += msg.String()
+			}
+		}
+	}
+
+	return m, nil
+}
+
+func (m model) View() (s string) {
+	if len(m.buffer) == 0 {
+		s = m.response
+	} else if len(m.response) == 0 {
+		s = m.buffer
+	}
+	return s
 }
