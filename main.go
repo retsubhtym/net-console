@@ -10,17 +10,11 @@ import (
 )
 
 func main() {
-	var host string
-	var port string
-
-	_ = flag.String("host", "", "Host address")
-	_ = flag.String("port", "", "Port")
+	host := flag.String("host", "", "Host address")
+	port := flag.String("port", "", "Port")
 
 	flag.Parse()
-	if flag.NArg() == 2 {
-		host = flag.Arg(0)
-		port = flag.Arg(1)
-	} else {
+	if *host == "" || *port == "" {
 		flag.Usage()
 		return
 	}
@@ -29,8 +23,8 @@ func main() {
 	messagePool := make(chan string)
 	responsePool := make(chan string)
 
-	fmt.Println("Trying " + host)
-	go initConnection("tcp", host, port, messagePool, responsePool)
+	fmt.Println("Trying " + *host)
+	go initConnection("tcp", *host, *port, messagePool, responsePool)
 
 	p := tea.NewProgram(initialModel(messagePool, responsePool))
 	if err := p.Start(); err != nil {
@@ -41,11 +35,12 @@ func main() {
 
 // initConnection connects to remove host via protocol provided in network string
 // awaits for data from messagePull and writes responses into responsePull
-func initConnection(network string, host string, port string, messagePull chan string, responsePull chan string) {
+func initConnection(network, host, port string, messagePull chan string, responsePull chan string) {
 
-	conn, err := net.Dial(network, host+":"+port)
+	conn, err := net.Dial(network, net.JoinHostPort(host, port))
 	if err != nil {
-		panic(err)
+		fmt.Println("Connection error:", err)
+		os.Exit(1)
 	}
 
 	fmt.Println("Connected to " + host)
@@ -86,8 +81,8 @@ type model struct {
 	responsePool chan string
 }
 
-func initialModel(messagePool chan string, responsePool chan string) model {
-	return model{
+func initialModel(messagePool chan string, responsePool chan string) *model {
+	return &model{
 		index:        -1,
 		buffer:       "",
 		response:     "",
@@ -96,16 +91,19 @@ func initialModel(messagePool chan string, responsePool chan string) model {
 	}
 }
 
-func (m model) Init() tea.Cmd {
-	go func() {
-		for {
-			m.response = <-m.responsePool
-		}
-	}()
-	return nil
+func (m *model) Init() tea.Cmd {
+	return m.waitForResponse()
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+type responseMsg string
+
+func (m *model) waitForResponse() tea.Cmd {
+	return func() tea.Msg {
+		return responseMsg(<-m.responsePool)
+	}
+}
+
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.KeyMsg:
@@ -136,7 +134,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.buffer = ""
 			}
 		case "backspace":
-			m.buffer = m.buffer[:(len(m.buffer) - 1)]
+			if len(m.buffer) > 0 {
+				m.buffer = m.buffer[:len(m.buffer)-1]
+			}
 		case "enter":
 			m.messagePool <- m.buffer + "\n"
 			if m.buffer != "" &&
@@ -150,16 +150,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.buffer += msg.String()
 			}
 		}
+	case responseMsg:
+		m.response = string(msg)
+		return m, m.waitForResponse()
 	}
 
 	return m, nil
 }
 
-func (m model) View() (s string) {
-	if len(m.buffer) == 0 {
-		s = m.response
-	} else if len(m.response) == 0 {
-		s = m.buffer
+func (m *model) View() (s string) {
+	if len(m.buffer) > 0 {
+		return m.buffer
 	}
-	return s
+	return m.response
 }
